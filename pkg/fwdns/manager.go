@@ -52,6 +52,7 @@ type NamespaceManager struct {
 	resyncInterval  time.Duration
 	retryInterval   time.Duration
 	autoReconnect   bool
+	localDNS        bool
 	labelSelector   string
 	fieldSelector   string
 
@@ -108,6 +109,7 @@ type ManagerConfig struct {
 	ResyncInterval  time.Duration
 	RetryInterval   time.Duration
 	AutoReconnect   bool
+	LocalDNS        bool
 	LabelSelector   string
 	FieldSelector   string
 	GlobalStopCh    <-chan struct{}
@@ -127,6 +129,7 @@ func NewManager(cfg ManagerConfig) *NamespaceManager {
 		resyncInterval:  cfg.ResyncInterval,
 		retryInterval:   cfg.RetryInterval,
 		autoReconnect:   cfg.AutoReconnect,
+		localDNS:        cfg.LocalDNS,
 		labelSelector:   cfg.LabelSelector,
 		fieldSelector:   cfg.FieldSelector,
 		configGetter:    fwdcfg.NewConfigGetter(),
@@ -521,6 +524,7 @@ func (m *NamespaceManager) CreateServiceFWD(ctx, namespace string, svc *v1.Servi
 		ResyncInterval:           m.resyncInterval,
 		RetryInterval:            m.retryInterval,
 		AutoReconnect:            m.autoReconnect,
+		LocalDNS:                 m.localDNS,
 	}
 
 	return svcfwd, nil
@@ -718,6 +722,7 @@ func (w *NamespaceWatcher) addServiceHandler(obj interface{}) {
 		ResyncInterval:           w.manager.resyncInterval,
 		RetryInterval:            w.manager.retryInterval,
 		AutoReconnect:            w.manager.autoReconnect,
+		LocalDNS:                 w.manager.localDNS,
 	}
 
 	// Add to registry

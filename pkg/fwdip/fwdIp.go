@@ -28,11 +28,12 @@ type ForwardIPOpts struct {
 // Registry is a structure to create and hold all of the
 // IP address assignments
 type Registry struct {
-	mutex     *sync.Mutex
-	inc       map[int]map[int]int
-	reg       map[string]net.IP
-	allocated map[string]bool
-	hostnames []string
+	mutex       *sync.Mutex
+	inc         map[int]map[int]int
+	reg         map[string]net.IP
+	allocated   map[string]bool
+	hostnames   []string
+	hostnameIPs map[string]string
 }
 
 type ForwardConfiguration struct {
@@ -54,9 +55,10 @@ func init() {
 	ipRegistry = &Registry{
 		mutex: &sync.Mutex{},
 		// counter for the service cluster and namespace
-		inc:       map[int]map[int]int{0: {0: 0}},
-		reg:       make(map[string]net.IP),
-		allocated: make(map[string]bool),
+		inc:         map[int]map[int]int{0: {0: 0}},
+		reg:         make(map[string]net.IP),
+		allocated:   make(map[string]bool),
+		hostnameIPs: make(map[string]string),
 	}
 }
 
@@ -74,14 +76,28 @@ func GetRegisteredHostnames() []string {
 	return result
 }
 
+func RegisterHostnameWithIP(hostname, ip string) {
+	ipRegistry.mutex.Lock()
+	defer ipRegistry.mutex.Unlock()
+	ipRegistry.hostnames = append(ipRegistry.hostnames, hostname)
+	ipRegistry.hostnameIPs[hostname] = ip
+}
+
+func LookupHostnameIP(hostname string) string {
+	ipRegistry.mutex.Lock()
+	defer ipRegistry.mutex.Unlock()
+	return ipRegistry.hostnameIPs[hostname]
+}
+
 // ResetRegistry resets the global IP registry for test isolation.
 // This should only be used in tests.
 func ResetRegistry() {
 	ipRegistry = &Registry{
-		mutex:     &sync.Mutex{},
-		inc:       map[int]map[int]int{0: {0: 0}},
-		reg:       make(map[string]net.IP),
-		allocated: make(map[string]bool),
+		mutex:       &sync.Mutex{},
+		inc:         map[int]map[int]int{0: {0: 0}},
+		reg:         make(map[string]net.IP),
+		allocated:   make(map[string]bool),
+		hostnameIPs: make(map[string]string),
 	}
 	forwardConfiguration = nil
 }

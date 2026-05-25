@@ -299,6 +299,7 @@ type PortForwardOpts struct {
 	NamespaceN int
 
 	Domain         string
+	LocalDNS       bool
 	Hosts          []string
 	ManualStopChan chan struct{} // Send a signal on this to stop the portforwarding
 	DoneChan       chan struct{} // Listen on this channel for when the shutdown is completed.
@@ -552,7 +553,7 @@ func (pfo *PortForwardOpts) PortForward() error {
 // addHost adds a hostname to the hosts file for this port forward
 func (pfo *PortForwardOpts) addHost(host string) {
 	pfo.Hosts = append(pfo.Hosts, host)
-	fwdip.RegisterHostname(host)
+	fwdip.RegisterHostnameWithIP(host, pfo.LocalIP.String())
 	pfo.HostFile.Hosts.RemoveHost(host)
 	pfo.HostFile.Hosts.AddHost(pfo.LocalIP.String(), host)
 
@@ -560,6 +561,16 @@ func (pfo *PortForwardOpts) addHost(host string) {
 	if host != sanitizedHost {
 		pfo.addHost(sanitizedHost) // should recurse only once
 	}
+}
+
+// addHostWithCollisionCheck adds a hostname only if it hasn't been claimed by a different IP.
+// If the hostname is already registered to a different IP, the hostname is skipped with a warning.
+func (pfo *PortForwardOpts) addHostWithCollisionCheck(host string) {
+	if existingIP := fwdip.LookupHostnameIP(host); existingIP != "" && existingIP != pfo.LocalIP.String() {
+		log.Warnf("hostname %q already mapped to %s (skipping for context %s)", host, existingIP, pfo.Context)
+		return
+	}
+	pfo.addHost(host)
 }
 
 // make sure any non-alphanumeric characters in the context name don't make it to the generated hostname
@@ -594,12 +605,17 @@ func (pfo *PortForwardOpts) AddHosts() error {
 	// pfo.Service holds only the service name
 	// start with the smallest allowable hostname
 
+	addHost := pfo.addHost
+	if pfo.LocalDNS {
+		addHost = pfo.addHostWithCollisionCheck
+	}
+
 	// bare service name
-	if pfo.ClusterN == 0 && pfo.NamespaceN == 0 {
-		pfo.addHost(pfo.Service)
+	if pfo.LocalDNS || (pfo.ClusterN == 0 && pfo.NamespaceN == 0) {
+		addHost(pfo.Service)
 
 		if pfo.Domain != "" {
-			pfo.addHost(fmt.Sprintf(
+			addHost(fmt.Sprintf(
 				"%s.%s",
 				pfo.Service,
 				pfo.Domain,
@@ -607,8 +623,8 @@ func (pfo *PortForwardOpts) AddHosts() error {
 		}
 	}
 
-	// alternate cluster / first namespace
-	if pfo.ClusterN > 0 && pfo.NamespaceN == 0 {
+	// alternate cluster / first namespace (without local-dns)
+	if !pfo.LocalDNS && pfo.ClusterN > 0 && pfo.NamespaceN == 0 {
 		pfo.addHost(fmt.Sprintf(
 			"%s.%s",
 			pfo.Service,
@@ -616,28 +632,28 @@ func (pfo *PortForwardOpts) AddHosts() error {
 		))
 	}
 
-	// namespaced without cluster
-	if pfo.ClusterN == 0 {
-		pfo.addHost(fmt.Sprintf(
+	// namespaced K8s DNS aliases
+	if pfo.LocalDNS || pfo.ClusterN == 0 {
+		addHost(fmt.Sprintf(
 			"%s.%s",
 			pfo.Service,
 			pfo.Namespace,
 		))
 
-		pfo.addHost(fmt.Sprintf(
+		addHost(fmt.Sprintf(
 			"%s.%s.svc",
 			pfo.Service,
 			pfo.Namespace,
 		))
 
-		pfo.addHost(fmt.Sprintf(
+		addHost(fmt.Sprintf(
 			"%s.%s.svc.cluster.local",
 			pfo.Service,
 			pfo.Namespace,
 		))
 
 		if pfo.Domain != "" {
-			pfo.addHost(fmt.Sprintf(
+			addHost(fmt.Sprintf(
 				"%s.%s.svc.cluster.%s",
 				pfo.Service,
 				pfo.Namespace,
@@ -647,6 +663,7 @@ func (pfo *PortForwardOpts) AddHosts() error {
 
 	}
 
+	// context-qualified entries (always generated, unique per context)
 	pfo.addHost(fmt.Sprintf(
 		"%s.%s.%s",
 		pfo.Service,
