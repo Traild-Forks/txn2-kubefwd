@@ -1105,3 +1105,37 @@ func TestRegisterHostname_Concurrent(t *testing.T) {
 		t.Errorf("Expected %d hostnames, got %d", numGoroutines, len(hostnames))
 	}
 }
+
+func TestRegisterHostnameWithIP(t *testing.T) {
+	ResetRegistry()
+
+	RegisterHostnameWithIP("my-service", "127.1.27.1")
+	RegisterHostnameWithIP("my-service.default", "127.1.27.1")
+
+	hostnames := GetRegisteredHostnames()
+	if len(hostnames) != 2 {
+		t.Errorf("Expected 2 hostnames, got %d", len(hostnames))
+	}
+
+	ip := LookupHostnameIP("my-service")
+	if ip != "127.1.27.1" {
+		t.Errorf("Expected IP 127.1.27.1, got %q", ip)
+	}
+
+	ip = LookupHostnameIP("nonexistent")
+	if ip != "" {
+		t.Errorf("Expected empty string for nonexistent hostname, got %q", ip)
+	}
+}
+
+func TestLookupHostnameIP_OverwritesOnReRegister(t *testing.T) {
+	ResetRegistry()
+
+	RegisterHostnameWithIP("my-service", "127.1.27.1")
+	RegisterHostnameWithIP("my-service", "127.1.27.2")
+
+	ip := LookupHostnameIP("my-service")
+	if ip != "127.1.27.2" {
+		t.Errorf("Expected IP 127.1.27.2 after re-register, got %q", ip)
+	}
+}

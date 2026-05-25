@@ -16,6 +16,9 @@ GOLANGCI_LINT := $(TOOLS_BIN)/golangci-lint
 PATCH_COVERAGE_TARGET ?= 50
 PATCH_BASE ?= origin/master
 
+VERSION ?= dev
+GOBIN ?= $(HOME)/go/bin
+
 GO ?= go
 
 .DEFAULT_GOAL := verify
@@ -104,6 +107,10 @@ patch-coverage: coverage.txt
 coverage.txt:
 	@$(MAKE) test
 
+.PHONY: install
+install:
+	go build -ldflags "-X main.Version=$(VERSION)" -o $(GOBIN)/x-kubefwd ./cmd/kubefwd/kubefwd.go
+
 .PHONY: clean
 clean:
 	rm -rf coverage.txt $(TOOLS_BIN) .tools
@@ -112,6 +119,7 @@ clean:
 help:
 	@echo "Targets:"
 	@echo "  verify           lint + test + build + tidy-check + action pins + patch coverage"
+	@echo "  install          build and install to \$(GOBIN) (default: ~/go/bin)"
 	@echo "  lint             golangci-lint (auto-installs $(GOLANGCI_LINT_VERSION) to .tools/)"
 	@echo "  test             go test -race with coverage profile"
 	@echo "  build            go build ./..."

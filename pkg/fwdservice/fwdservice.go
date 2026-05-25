@@ -3,6 +3,7 @@ package fwdservice
 import (
 	"context"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -62,6 +63,10 @@ type ServiceFWD struct {
 
 	// Domain is specified by the user and used in place of .local
 	Domain string
+
+	// LocalDNS generates standard K8s DNS aliases for all services
+	// regardless of which context they came from
+	LocalDNS bool
 
 	PodLabelSelector     string      // The label selector to query for matching pods.
 	NamespaceServiceLock *sync.Mutex //
@@ -592,6 +597,7 @@ func (svcFwd *ServiceFWD) LoopPodsToForward(pods []v1.Pod, includePodNameInHost 
 				ClusterN:      svcFwd.ClusterN,
 				NamespaceN:    svcFwd.NamespaceN,
 				Domain:        svcFwd.Domain,
+				LocalDNS:      svcFwd.LocalDNS,
 
 				ManualStopChan: make(chan struct{}),
 				DoneChan:       make(chan struct{}),
@@ -634,6 +640,12 @@ func (svcFwd *ServiceFWD) LoopPodsToForward(pods []v1.Pod, includePodNameInHost 
 				// will be closed - we can't use it to distinguish manual stop from error.
 				if err != nil {
 					log.Errorf("PortForward error on %s/%s: %s", pfo.Namespace, pfo.PodName, err.Error())
+					// Don't retry permanent RBAC/permission errors (e.g. GKE managed namespaces)
+					errMsg := err.Error()
+					if strings.Contains(errMsg, "is forbidden") || strings.Contains(errMsg, "cannot create resource") {
+						log.Warnf("Skipping reconnection for %s — permission denied (not retryable)", svcFwd)
+						return
+					}
 					// Attempt auto-reconnection if enabled
 					svcFwd.scheduleReconnect()
 					return
