@@ -57,6 +57,7 @@ var tuiMode bool
 var apiMode bool
 var autoReconnect bool
 var themeOverride string
+var localDNS bool
 
 // Version is set by the main package
 var Version string
@@ -97,6 +98,7 @@ func init() {
 	Cmd.Flags().BoolVar(&apiMode, "api", false, "Enable REST API server on http://kubefwd.internal/api for automation and monitoring")
 	Cmd.Flags().BoolVarP(&autoReconnect, "auto-reconnect", "a", false, "Automatically reconnect when port forwards are lost (exponential backoff: 1s to 5min). Defaults to true in TUI/API mode.")
 	Cmd.Flags().StringVar(&themeOverride, "theme", "", "Color theme for TUI: 'light' or 'dark' (auto-detected if not set, env: KUBEFWD_THEME)")
+	Cmd.Flags().BoolVar(&localDNS, "local-dns", false, "Generate standard Kubernetes DNS aliases (name, name.namespace, name.namespace.svc, name.namespace.svc.cluster.local) for all services, including cross-context services specified with -x.")
 }
 
 var Cmd = &cobra.Command{
@@ -466,7 +468,9 @@ func startNamespaceWatchers(
 	clientSets map[string]*kubernetes.Clientset,
 	clientSetsMu *sync.RWMutex,
 ) {
+
 	for _, ctx := range contexts {
+		log.Infof("Connecting to context %s...", ctx)
 		restConfig, err := configGetter.GetRestConfig(cfgFilePath, ctx)
 		if err != nil {
 			log.Fatalf("Error generating REST configuration: %s\n", err.Error())
@@ -481,18 +485,22 @@ func startNamespaceWatchers(
 		clientSets[ctx] = clientSet
 		clientSetsMu.Unlock()
 
+		// With -A, query namespaces per-context (each cluster may have different namespaces)
+		ctxNamespaces := namespaces
 		if isAllNs {
-			if len(namespaces) > 1 {
-				log.Fatalf("Error: cannot combine options --all-namespaces and -n.")
-			}
-			setAllNamespace(clientSet, listOptions, &namespaces)
+			log.Infof("Listing namespaces in context %s...", ctx)
+			ctxNamespaces = nil
+			setAllNamespace(clientSet, listOptions, &ctxNamespaces)
+			log.Infof("Found %d namespaces in context %s", len(ctxNamespaces), ctx)
 		}
 
-		if err = checkConnection(clientSet, namespaces); err != nil {
+		log.Infof("Checking RBAC permissions for %d namespaces in context %s...", len(ctxNamespaces), ctx)
+		if err = checkConnection(clientSet, ctxNamespaces); err != nil {
 			log.Fatalf("Error connecting to k8s cluster: %s\n", err.Error())
 		}
+		log.Infof("RBAC permissions verified for context %s", ctx)
 
-		for _, namespace := range namespaces {
+		for _, namespace := range ctxNamespaces {
 			if _, err := nsManager.StartWatcher(ctx, namespace, fwdns.WatcherOpts{
 				LabelSelector: listOptions.LabelSelector,
 				FieldSelector: listOptions.FieldSelector,
@@ -579,6 +587,7 @@ func createNamespaceManager(hostFileWithLock *fwdport.HostFileWithLock, cfgFileP
 		ResyncInterval:  resyncInterval,
 		RetryInterval:   retryInterval,
 		AutoReconnect:   autoReconnect,
+		LocalDNS:        localDNS,
 		LabelSelector:   listOptions.LabelSelector,
 		FieldSelector:   listOptions.FieldSelector,
 		GlobalStopCh:    stopListenCh,
@@ -668,18 +677,59 @@ func runCmd(cmd *cobra.Command, _ []string) {
 		log.Printf("Adding custom domain %s to all forwarded entries\n", domain)
 	}
 
+	log.Infof("Loading kubeconfig...")
 	cfgFilePath := getKubeConfigPath(cmd)
 	configGetter := fwdcfg.NewConfigGetter()
 	rawConfig, err := configGetter.GetClientConfig(cfgFilePath)
 	if err != nil {
 		log.Fatalf("Error in get rawConfig: %s\n", err.Error())
 	}
+	log.Infof("Loaded kubeconfig from %s", cfgFilePath)
 
 	listOptions := setupListOptions(cmd)
+
+	if isAllNs && cmd.Flags().Changed("namespace") {
+		log.Fatalf("Error: cannot combine options --all-namespaces and -n.")
+	}
+	if isAllNs && !cmd.Flags().Changed("auto-reconnect") {
+		autoReconnect = true
+	}
 	resolveNamespaces(rawConfig, idleMode)
 
 	if len(contexts) < 1 {
 		contexts = append(contexts, rawConfig.CurrentContext)
+	}
+
+	// Log effective configuration
+	log.Infof("Configuration:")
+	log.Infof("  Contexts:        %v", contexts)
+	if isAllNs {
+		log.Infof("  Namespaces:      all (--all-namespaces)")
+	} else {
+		log.Infof("  Namespaces:      %v", namespaces)
+	}
+	log.Infof("  Auto-reconnect:  %v", autoReconnect)
+	log.Infof("  Timeout:         %ds", timeout)
+	if listOptions.LabelSelector != "" {
+		log.Infof("  Label selector:  %s", listOptions.LabelSelector)
+	}
+	if listOptions.FieldSelector != "" {
+		log.Infof("  Field selector:  %s", listOptions.FieldSelector)
+	}
+	if len(mappings) > 0 {
+		log.Infof("  Port mappings:   %v", mappings)
+	}
+	if localDNS {
+		log.Infof("  Local DNS:       enabled")
+	}
+	if fwdConfigurationPath != "" {
+		log.Infof("  Forward config:  %s", fwdConfigurationPath)
+	}
+	if tuiMode {
+		log.Infof("  TUI:             enabled")
+	}
+	if apiMode {
+		log.Infof("  API:             enabled")
 	}
 
 	stopListenCh := make(chan struct{})

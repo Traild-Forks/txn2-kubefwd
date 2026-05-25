@@ -9,7 +9,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/txn2/kubefwd/pkg/fwdip"
 	"github.com/txn2/txeh"
+)
+
+const (
+	testService   = "test-svc"
+	testNamespace = "default"
+	testContext   = "test-ctx"
+	testLocalIP   = "127.1.27.1"
+
+	// remoteService/remoteNamespace/remoteContext are used in tests that exercise
+	// multi-cluster behaviour. Values are intentionally generic.
+	remoteService   = "alpha-svc"
+	remoteNamespace = "team-ns"
+	remoteContext   = "remote-ctx"
+	remoteLocalIP   = "127.2.27.1"
 )
 
 // createTempHostsFile creates a temporary hosts file for testing
@@ -77,8 +92,8 @@ func TestAddHosts_SingleCall(t *testing.T) {
 	hostFile, _, cleanup := createTempHostsFile(t)
 	defer cleanup()
 
-	localIP := net.ParseIP("127.1.27.1")
-	pfo := createMockPortForwardOpts(hostFile, "test-svc", "default", "test-ctx", localIP)
+	localIP := net.ParseIP(testLocalIP)
+	pfo := createMockPortForwardOpts(hostFile, testService, testNamespace, testContext, localIP)
 
 	if err := pfo.AddHosts(); err != nil {
 		t.Fatalf("AddHosts failed: %v", err)
@@ -103,8 +118,8 @@ func TestRemoveHosts_SingleCall(t *testing.T) {
 	hostFile, _, cleanup := createTempHostsFile(t)
 	defer cleanup()
 
-	localIP := net.ParseIP("127.1.27.1")
-	pfo := createMockPortForwardOpts(hostFile, "test-svc", "default", "test-ctx", localIP)
+	localIP := net.ParseIP(testLocalIP)
+	pfo := createMockPortForwardOpts(hostFile, testService, testNamespace, testContext, localIP)
 
 	// First add hosts
 	if err := pfo.AddHosts(); err != nil {
@@ -135,13 +150,13 @@ func TestAddHosts_ConcurrentSameService(t *testing.T) {
 	numGoroutines := 50
 	var wg sync.WaitGroup
 
-	localIP := net.ParseIP("127.1.27.1")
+	localIP := net.ParseIP(testLocalIP)
 
 	for i := 0; i < numGoroutines; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			pfo := createMockPortForwardOpts(hostFile, "test-svc", "default", "test-ctx", localIP)
+			pfo := createMockPortForwardOpts(hostFile, testService, testNamespace, testContext, localIP)
 			_ = pfo.AddHosts()
 		}()
 	}
@@ -166,7 +181,7 @@ func TestAddHosts_ConcurrentDifferentServices(t *testing.T) {
 			defer wg.Done()
 			localIP := net.ParseIP(fmt.Sprintf("127.1.27.%d", n+1))
 			service := fmt.Sprintf("svc-%d", n)
-			pfo := createMockPortForwardOpts(hostFile, service, "default", "test-ctx", localIP)
+			pfo := createMockPortForwardOpts(hostFile, service, testNamespace, testContext, localIP)
 			_ = pfo.AddHosts()
 		}(i)
 	}
@@ -194,7 +209,7 @@ func TestRemoveHosts_Concurrent(t *testing.T) {
 	for i := 0; i < numServices; i++ {
 		localIP := net.ParseIP(fmt.Sprintf("127.1.27.%d", i+1))
 		service := fmt.Sprintf("svc-%d", i)
-		pfo := createMockPortForwardOpts(hostFile, service, "default", "test-ctx", localIP)
+		pfo := createMockPortForwardOpts(hostFile, service, testNamespace, testContext, localIP)
 		_ = pfo.AddHosts()
 		pfos[i] = pfo
 	}
@@ -229,7 +244,7 @@ func TestAddAndRemoveHosts_Concurrent(t *testing.T) {
 			defer wg.Done()
 			localIP := net.ParseIP(fmt.Sprintf("127.1.27.%d", (n%250)+1))
 			service := fmt.Sprintf("svc-%d", n)
-			pfo := createMockPortForwardOpts(hostFile, service, "default", "test-ctx", localIP)
+			pfo := createMockPortForwardOpts(hostFile, service, testNamespace, testContext, localIP)
 			_ = pfo.AddHosts()
 		}(i)
 	}
@@ -244,10 +259,10 @@ func TestAddAndRemoveHosts_Concurrent(t *testing.T) {
 
 			localIP := net.ParseIP(fmt.Sprintf("127.1.27.%d", (n%250)+1))
 			service := fmt.Sprintf("svc-%d", n)
-			pfo := createMockPortForwardOpts(hostFile, service, "default", "test-ctx", localIP)
+			pfo := createMockPortForwardOpts(hostFile, service, testNamespace, testContext, localIP)
 
 			// Populate Hosts slice for removal
-			pfo.Hosts = []string{service, fmt.Sprintf("%s.default", service)}
+			pfo.Hosts = []string{service, fmt.Sprintf("%s.%s", service, testNamespace)}
 			pfo.removeHosts()
 		}(i)
 	}
@@ -277,7 +292,7 @@ func TestHostsFileReload_WhileWriting(t *testing.T) {
 			default:
 				localIP := net.ParseIP(fmt.Sprintf("127.1.27.%d", (counter%250)+1))
 				service := fmt.Sprintf("svc-%d", counter)
-				pfo := createMockPortForwardOpts(hostFile, service, "default", "test-ctx", localIP)
+				pfo := createMockPortForwardOpts(hostFile, service, testNamespace, testContext, localIP)
 				_ = pfo.AddHosts()
 				counter++
 				time.Sleep(time.Millisecond)
@@ -371,8 +386,8 @@ func TestAddHost_WithSanitization(t *testing.T) {
 	hostFile, _, cleanup := createTempHostsFile(t)
 	defer cleanup()
 
-	localIP := net.ParseIP("127.1.27.1")
-	pfo := createMockPortForwardOpts(hostFile, "test.svc", "default", "test-ctx", localIP)
+	localIP := net.ParseIP(testLocalIP)
+	pfo := createMockPortForwardOpts(hostFile, "test.svc", testNamespace, testContext, localIP)
 
 	hostFile.Lock()
 	pfo.addHost("service.with.dots")
@@ -442,8 +457,8 @@ func TestAddHosts_DifferentClusterNamespaceConfigurations(t *testing.T) {
 			hostFile, _, cleanup := createTempHostsFile(t)
 			defer cleanup()
 
-			localIP := net.ParseIP("127.1.27.1")
-			pfo := createMockPortForwardOpts(hostFile, "test-svc", "default", "test-ctx", localIP)
+			localIP := net.ParseIP(testLocalIP)
+			pfo := createMockPortForwardOpts(hostFile, testService, testNamespace, testContext, localIP)
 			pfo.ClusterN = tt.clusterN
 			pfo.NamespaceN = tt.namespaceN
 			pfo.Domain = tt.domain
@@ -465,17 +480,19 @@ func TestConcurrentAddRemoveSameHost(t *testing.T) {
 	hostFile, _, cleanup := createTempHostsFile(t)
 	defer cleanup()
 
+	const sameSvc = "same-svc"
+
 	var wg sync.WaitGroup
 	numOperations := 50
 
-	localIP := net.ParseIP("127.1.27.1")
+	localIP := net.ParseIP(testLocalIP)
 
 	// Half the goroutines add the same service
 	for i := 0; i < numOperations; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			pfo := createMockPortForwardOpts(hostFile, "same-svc", "default", "test-ctx", localIP)
+			pfo := createMockPortForwardOpts(hostFile, sameSvc, testNamespace, testContext, localIP)
 			_ = pfo.AddHosts()
 		}()
 	}
@@ -486,8 +503,12 @@ func TestConcurrentAddRemoveSameHost(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			time.Sleep(time.Millisecond * 5) // slight delay to let some adds happen
-			pfo := createMockPortForwardOpts(hostFile, "same-svc", "default", "test-ctx", localIP)
-			pfo.Hosts = []string{"same-svc", "same-svc.default", "same-svc.default.test-ctx"}
+			pfo := createMockPortForwardOpts(hostFile, sameSvc, testNamespace, testContext, localIP)
+			pfo.Hosts = []string{
+				sameSvc,
+				fmt.Sprintf("%s.%s", sameSvc, testNamespace),
+				fmt.Sprintf("%s.%s.%s", sameSvc, testNamespace, testContext),
+			}
 			pfo.removeHosts()
 		}()
 	}
@@ -531,8 +552,8 @@ func TestHostsFileSaveError(t *testing.T) {
 		t.Fatalf("Failed to make file read-only: %v", err)
 	}
 
-	localIP := net.ParseIP("127.1.27.1")
-	pfo := createMockPortForwardOpts(hostFile, "test-svc", "default", "test-ctx", localIP)
+	localIP := net.ParseIP(testLocalIP)
+	pfo := createMockPortForwardOpts(hostFile, testService, testNamespace, testContext, localIP)
 
 	// This should not panic, even though save will fail
 	_ = pfo.AddHosts()
@@ -547,8 +568,8 @@ func TestHostsFileReloadError(t *testing.T) {
 	defer cleanup()
 
 	// First add some hosts
-	localIP := net.ParseIP("127.1.27.1")
-	pfo := createMockPortForwardOpts(hostFile, "test-svc", "default", "test-ctx", localIP)
+	localIP := net.ParseIP(testLocalIP)
+	pfo := createMockPortForwardOpts(hostFile, testService, testNamespace, testContext, localIP)
 	_ = pfo.AddHosts()
 
 	// Remove the hosts file to trigger reload error
@@ -566,4 +587,223 @@ func TestHostsFileReloadError(t *testing.T) {
 // TestRaceConditions is a placeholder test that reminds us to run with -race
 func TestRaceConditions(t *testing.T) {
 	t.Log("Run with: go test -race ./pkg/fwdport/... to detect race conditions")
+}
+
+func TestAddHosts_LocalDNS_RemoteCluster(t *testing.T) {
+	fwdip.ResetRegistry()
+	hostFile, _, cleanup := createTempHostsFile(t)
+	defer cleanup()
+
+	localIP := net.ParseIP(remoteLocalIP)
+	pfo := createMockPortForwardOpts(hostFile, remoteService, remoteNamespace, remoteContext, localIP)
+	pfo.ClusterN = 1
+	pfo.NamespaceN = 0
+	pfo.LocalDNS = true
+
+	if err := pfo.AddHosts(); err != nil {
+		t.Fatalf("AddHosts failed: %v", err)
+	}
+
+	// Should have standard K8s DNS aliases even though ClusterN > 0
+	expectedHosts := []string{
+		remoteService,
+		remoteService + "." + remoteNamespace,
+		remoteService + "." + remoteNamespace + ".svc",
+		remoteService + "." + remoteNamespace + ".svc.cluster.local",
+	}
+
+	for _, expected := range expectedHosts {
+		found := false
+		for _, h := range pfo.Hosts {
+			if h == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected host %q not found in Hosts: %v", expected, pfo.Hosts)
+		}
+	}
+
+	// Should also have context-qualified entries
+	contextHosts := []string{
+		remoteService + "." + remoteNamespace + "." + remoteContext,
+		remoteService + "." + remoteNamespace + ".svc." + remoteContext,
+		remoteService + "." + remoteNamespace + ".svc.cluster." + remoteContext,
+	}
+
+	for _, expected := range contextHosts {
+		found := false
+		for _, h := range pfo.Hosts {
+			if h == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected context-qualified host %q not found in Hosts: %v", expected, pfo.Hosts)
+		}
+	}
+}
+
+func TestAddHosts_LocalDNS_CollisionDetection(t *testing.T) {
+	fwdip.ResetRegistry()
+	hostFile, _, cleanup := createTempHostsFile(t)
+	defer cleanup()
+
+	const (
+		collisionSvc = "redis"
+		ctx1         = "ctx1"
+		ctx2         = "ctx2"
+		ip1          = "127.1.27.1"
+		ip2          = "127.2.27.1"
+	)
+
+	// First service from context 1
+	localIP1 := net.ParseIP(ip1)
+	pfo1 := createMockPortForwardOpts(hostFile, collisionSvc, testNamespace, ctx1, localIP1)
+	pfo1.ClusterN = 0
+	pfo1.NamespaceN = 0
+	pfo1.LocalDNS = true
+
+	if err := pfo1.AddHosts(); err != nil {
+		t.Fatalf("AddHosts for ctx1 failed: %v", err)
+	}
+
+	// Second service from context 2, same name+namespace
+	localIP2 := net.ParseIP(ip2)
+	pfo2 := createMockPortForwardOpts(hostFile, collisionSvc, testNamespace, ctx2, localIP2)
+	pfo2.ClusterN = 1
+	pfo2.NamespaceN = 0
+	pfo2.LocalDNS = true
+
+	if err := pfo2.AddHosts(); err != nil {
+		t.Fatalf("AddHosts for ctx2 failed: %v", err)
+	}
+
+	// The bare hostname should still resolve to the first IP (first-wins)
+	ip := fwdip.LookupHostnameIP(collisionSvc)
+	if ip != ip1 {
+		t.Errorf("Expected first-wins IP %s for %q, got %q", ip1, collisionSvc, ip)
+	}
+
+	// The second service should NOT have the bare hostname (collision)
+	for _, h := range pfo2.Hosts {
+		if h == collisionSvc {
+			t.Errorf("Second service should not have bare %q hostname (collision)", collisionSvc)
+		}
+	}
+
+	// But context-qualified entries should still be present for both
+	expected := collisionSvc + "." + testNamespace + "." + ctx2
+	found := false
+	for _, h := range pfo2.Hosts {
+		if h == expected {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected context-qualified %q in second service Hosts: %v", expected, pfo2.Hosts)
+	}
+}
+
+func TestAddHosts_LocalDNS_SameIPNotCollision(t *testing.T) {
+	fwdip.ResetRegistry()
+	hostFile, _, cleanup := createTempHostsFile(t)
+	defer cleanup()
+
+	// Register a hostname with an IP
+	fwdip.RegisterHostnameWithIP("my-svc", testLocalIP)
+
+	// Same service re-adding with same IP should succeed
+	localIP := net.ParseIP(testLocalIP)
+	pfo := createMockPortForwardOpts(hostFile, "my-svc", testNamespace, testContext, localIP)
+	pfo.LocalDNS = true
+
+	if err := pfo.AddHosts(); err != nil {
+		t.Fatalf("AddHosts failed: %v", err)
+	}
+
+	// "my-svc" should be in the Hosts list (not skipped)
+	found := false
+	for _, h := range pfo.Hosts {
+		if h == "my-svc" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected 'my-svc' to be added (same IP, not a collision): %v", pfo.Hosts)
+	}
+}
+
+func TestAddHosts_DefaultBehavior_RemoteClusterNoLocalDNS(t *testing.T) {
+	fwdip.ResetRegistry()
+	hostFile, _, cleanup := createTempHostsFile(t)
+	defer cleanup()
+
+	localIP := net.ParseIP(remoteLocalIP)
+	pfo := createMockPortForwardOpts(hostFile, remoteService, remoteNamespace, remoteContext, localIP)
+	pfo.ClusterN = 1
+	pfo.NamespaceN = 0
+	// LocalDNS defaults to false
+
+	if err := pfo.AddHosts(); err != nil {
+		t.Fatalf("AddHosts failed: %v", err)
+	}
+
+	// Should NOT have bare service name or K8s DNS aliases
+	disallowed := []string{
+		remoteService,
+		remoteService + "." + remoteNamespace + ".svc",
+		remoteService + "." + remoteNamespace + ".svc.cluster.local",
+	}
+
+	for _, bad := range disallowed {
+		for _, h := range pfo.Hosts {
+			if h == bad {
+				t.Errorf("Host %q should NOT be present when LocalDNS is false and ClusterN > 0", bad)
+			}
+		}
+	}
+
+	// Should have context-qualified entry for ClusterN > 0
+	expected := remoteService + "." + remoteContext
+	found := false
+	for _, h := range pfo.Hosts {
+		if h == expected {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected %q for remote cluster, got: %v", expected, pfo.Hosts)
+	}
+}
+
+func TestAddHost_RegistersHostnameWithIP(t *testing.T) {
+	fwdip.ResetRegistry()
+	hostFile, _, cleanup := createTempHostsFile(t)
+	defer cleanup()
+
+	localIP := net.ParseIP(testLocalIP)
+	pfo := createMockPortForwardOpts(hostFile, testService, testNamespace, testContext, localIP)
+
+	if err := pfo.AddHosts(); err != nil {
+		t.Fatalf("AddHosts failed: %v", err)
+	}
+
+	// Verify at least the bare service name was registered with its IP
+	ip := fwdip.LookupHostnameIP(testService)
+	if ip != testLocalIP {
+		t.Errorf("Expected IP %s for %s, got %q", testLocalIP, testService, ip)
+	}
+
+	// Verify a namespaced entry was registered with its IP
+	namespacedSvc := testService + "." + testNamespace
+	ip = fwdip.LookupHostnameIP(namespacedSvc)
+	if ip != testLocalIP {
+		t.Errorf("Expected IP %s for %s, got %q", testLocalIP, namespacedSvc, ip)
+	}
 }
